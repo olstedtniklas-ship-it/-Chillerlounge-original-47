@@ -232,12 +232,28 @@ class WelcomeView(discord.ui.View):
                 return m.author == interaction.user and m.channel == interaction.channel and m.attachments
 
             msg = await bot.wait_for("message", check=check, timeout=60)
-            welcome_config["image"] = msg.attachments[0].url
-            set_config("welcome_image", msg.attachments[0].url)
-            await msg.delete()
-            await interaction.followup.send("✅ Bild gesetzt!", ephemeral=True)
+            attachment = msg.attachments[0]
+
+            async with web.ClientSession() as session:
+                async with session.get(attachment.url) as resp:
+                    if resp.status == 200:
+                        image_data = await resp.read()
+                        ext = attachment.filename.split(".")[-1].lower()
+                        filename = f"welcome_image.{ext}"
+                        with open(filename, "wb") as f:
+                            f.write(image_data)
+                        welcome_config["image"] = filename
+                        set_config("welcome_image", filename)
+
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+
+            await interaction.followup.send("✅ Bild gesetzt und gespeichert!", ephemeral=True)
         except Exception as e:
             print(f"❌ Fehler in Welcome Bild Button: {e}")
+            traceback.print_exc()
             await interaction.followup.send("❌ Zeitüberschreitung — bitte erneut versuchen.", ephemeral=True)
 
     @discord.ui.button(label="📢 Dieser Kanal", style=discord.ButtonStyle.primary, custom_id="welcome_kanal")
@@ -400,11 +416,16 @@ async def on_member_join(member: discord.Member):
             if channel:
                 text = welcome_config["message"].replace("%user", member.mention)
                 embed = discord.Embed(description=text, color=discord.Color.green())
-                if welcome_config["image"]:
-                    embed.set_image(url=welcome_config["image"])
-                await channel.send(embed=embed)
+                image_path = welcome_config["image"]
+                if image_path and os.path.isfile(image_path):
+                    file = discord.File(image_path, filename=os.path.basename(image_path))
+                    embed.set_image(url=f"attachment://{os.path.basename(image_path)}")
+                    await channel.send(embed=embed, file=file)
+                else:
+                    await channel.send(embed=embed)
     except Exception as e:
         print(f"❌ Fehler beim Willkommensnachricht senden: {e}")
+        traceback.print_exc()
 
 # =========================================================
 # WEBSERVER (hält den Bot wach via UptimeRobot)
