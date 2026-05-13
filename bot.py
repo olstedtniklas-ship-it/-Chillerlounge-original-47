@@ -37,33 +37,19 @@ CREATE TABLE IF NOT EXISTS config (
     value TEXT
 )
 """)
-
 conn.commit()
 
 def get_config(key, default=None):
     cursor.execute("SELECT value FROM config WHERE key = ?", (key,))
-    result = cursor.fetchone()
-    return result[0] if result else default
+    r = cursor.fetchone()
+    return r[0] if r else default
 
 def set_config(key, value):
     cursor.execute(
-        "INSERT INTO config (key, value) VALUES (?, ?) "
+        "INSERT INTO config (key,value) VALUES (?,?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, str(value))
     )
-    conn.commit()
-
-def get_xp(user_id):
-    cursor.execute("SELECT xp FROM users WHERE user_id = ?", (user_id,))
-    r = cursor.fetchone()
-    return r[0] if r else 0
-
-def add_xp(user_id, amount):
-    xp = get_xp(user_id)
-    if xp == 0:
-        cursor.execute("INSERT INTO users (user_id, xp) VALUES (?, ?)", (user_id, amount))
-    else:
-        cursor.execute("UPDATE users SET xp = ? WHERE user_id = ?", (xp + amount, user_id))
     conn.commit()
 
 # =========================================================
@@ -71,16 +57,11 @@ def add_xp(user_id, amount):
 # =========================================================
 
 welcome_config = {
-    "enabled": True,
+    "enabled": get_config("welcome_enabled", "False") == "True",
     "channel_id": int(get_config("welcome_channel_id", 0)),
-    "message": get_config("welcome_message", "Willkommen %user auf dem Server! 💖"),
-    "image": "welcome.png",
+    "message": get_config("welcome_message", "Willkommen %user 💖"),
+    "image_url": get_config("welcome_image_url", None),
     "autorole_id": int(get_config("welcome_autorole_id", 0))
-}
-
-vip_config = {
-    "role_id": int(get_config("vip_role_id", 0)),
-    "required_xp": 10000
 }
 
 # =========================================================
@@ -89,73 +70,70 @@ vip_config = {
 
 @bot.event
 async def on_ready():
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ {len(synced)} Slash Commands synchronisiert")
-    except Exception as e:
-        print(e)
-
-    if not xp_loop.is_running():
-        xp_loop.start()
-
-    print(f"🟢 Bot online als {bot.user}")
+    bot.add_view(RoleView())
+    synced = await bot.tree.sync()
+    print(f"✅ {len(synced)} Commands geladen")
+    print(f"🟢 Online als {bot.user}")
 
 # =========================================================
-# XP LOOP
+# WELCOME SETUP
 # =========================================================
 
-@tasks.loop(minutes=60)
-async def xp_loop():
-    for guild in bot.guilds:
-        for member in guild.members:
-            if member.bot:
-                continue
+class WelcomeTextModal(discord.ui.Modal, title="Willkommensnachricht"):
+    text = discord.ui.TextInput(label="Text (%user = Erwähnung)", max_length=500)
 
-            add_xp(member.id, 10)
+    async def on_submit(self, interaction: discord.Interaction):
+        welcome_config["message"] = self.text.value
+        set_config("welcome_message", self.text.value)
+        await interaction.response.send_message("✅ Nachricht gespeichert", ephemeral=True)
 
-            if vip_config["role_id"]:
-                role = guild.get_role(vip_config["role_id"])
-                if role and get_xp(member.id) >= vip_config["required_xp"]:
-                    if role not in member.roles:
-                        await member.add_roles(role)
+class WelcomeImageModal(discord.ui.Modal, title="Welcome Bild URL"):
+    url = discord.ui.TextInput(label="Bild URL (https://...)", max_length=300)
 
-# =========================================================
-# XP COMMAND
-# =========================================================
+    async def on_submit(self, interaction: discord.Interaction):
+        welcome_config["image_url"] = self.url.value
+        set_config("welcome_image_url", self.url.value)
+        await interaction.response.send_message("✅ Bild URL gespeichert", ephemeral=True)
 
-@bot.tree.command(name="xp", description="Zeigt dein XP")
-async def xp(interaction: discord.Interaction):
-    xp = get_xp(interaction.user.id)
-    embed = discord.Embed(
-        title="📊 XP",
-        description=f"Du hast **{xp} XP**",
-        color=discord.Color.gold()
-    )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+class WelcomeView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
-# =========================================================
-# AUTOROLE COMMAND
-# =========================================================
+    @discord.ui.button(label="✍️ Text", style=discord.ButtonStyle.primary)
+    async def text(self, interaction, _):
+        await interaction.response.send_modal(WelcomeTextModal())
 
-@bot.tree.command(name="autorole", description="Setzt AutoRole")
-async def autorole(interaction: discord.Interaction, role: discord.Role):
-    welcome_config["autorole_id"] = role.id
-    set_config("welcome_autorole_id", role.id)
-    await interaction.response.send_message(
-        f"✅ AutoRole gesetzt: {role.mention}", ephemeral=True
-    )
+    @discord.ui.button(label="🖼️ Bild URL", style=discord.ButtonStyle.primary)
+    async def image(self, interaction, _):
+        await interaction.response.send_modal(WelcomeImageModal())
 
-# =========================================================
-# WELCOME COMMAND
-# =========================================================
+    @discord.ui.button(label="📢 Kanal", style=discord.ButtonStyle.secondary)
+    async def channel(self, interaction, _):
+        welcome_config["channel_id"] = interaction.channel.id
+        set_config("welcome_channel_id", interaction.channel.id)
+        await interaction.response.send_message("✅ Kanal gesetzt", ephemeral=True)
 
-@bot.tree.command(name="welcome", description="Setzt Welcome Kanal")
+    @discord.ui.button(label="🔔 An / Aus", style=discord.ButtonStyle.success)
+    async def toggle(self, interaction, _):
+        welcome_config["enabled"] = not welcome_config["enabled"]
+        set_config("welcome_enabled", welcome_config["enabled"])
+        await interaction.response.send_message(
+            f"Welcome {'aktiviert' if welcome_config['enabled'] else 'deaktiviert'}",
+            ephemeral=True
+        )
+
+@bot.tree.command(name="welcome", description="Welcome System einstellen")
 async def welcome(interaction: discord.Interaction):
-    welcome_config["channel_id"] = interaction.channel.id
-    set_config("welcome_channel_id", interaction.channel.id)
-    await interaction.response.send_message(
-        f"✅ Welcome-Kanal gesetzt: {interaction.channel.mention}", ephemeral=True
+    embed = discord.Embed(
+        title="👋 Welcome Setup",
+        description=(
+            f"**Status:** {'✅ Aktiv' if welcome_config['enabled'] else '❌ Inaktiv'}\n"
+            f"**Nachricht:** {welcome_config['message']}\n"
+            f"**Bild:** {'Gesetzt' if welcome_config['image_url'] else 'Keins'}"
+        ),
+        color=discord.Color.pink()
     )
+    await interaction.response.send_message(embed=embed, view=WelcomeView(), ephemeral=True)
 
 # =========================================================
 # MEMBER JOIN
@@ -163,55 +141,78 @@ async def welcome(interaction: discord.Interaction):
 
 @bot.event
 async def on_member_join(member: discord.Member):
-    # AutoRole
-    try:
-        if welcome_config["autorole_id"]:
-            role = member.guild.get_role(welcome_config["autorole_id"])
+    if welcome_config["autorole_id"]:
+        role = member.guild.get_role(welcome_config["autorole_id"])
+        if role:
+            await member.add_roles(role)
+
+    if not welcome_config["enabled"]:
+        return
+
+    channel = member.guild.get_channel(welcome_config["channel_id"])
+    if not channel:
+        return
+
+    text = welcome_config["message"].replace("%user", member.mention)
+    embed = discord.Embed(description=text, color=discord.Color.pink())
+
+    if welcome_config["image_url"]:
+        embed.set_image(url=welcome_config["image_url"])
+
+    await channel.send(embed=embed)
+
+# =========================================================
+# AUTOROLE
+# =========================================================
+
+@bot.tree.command(name="autorole", description="AutoRole setzen")
+async def autorole(interaction: discord.Interaction, role: discord.Role):
+    welcome_config["autorole_id"] = role.id
+    set_config("welcome_autorole_id", role.id)
+    await interaction.response.send_message("✅ AutoRole gesetzt", ephemeral=True)
+
+# =========================================================
+# ROLE SELECT
+# =========================================================
+
+class RoleSelect(discord.ui.Select):
+    def __init__(self, roles):
+        options = [discord.SelectOption(label=r.name, value=str(r.id)) for r in roles]
+        super().__init__(placeholder="🎭 Rollen auswählen", options=options, min_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        for rid in self.values:
+            role = interaction.guild.get_role(int(rid))
             if role:
-                await member.add_roles(role)
-    except Exception as e:
-        print(e)
+                await interaction.user.add_roles(role)
+        await interaction.response.send_message("✅ Rollen vergeben", ephemeral=True)
 
-    # Welcome Message
-    try:
-        channel = member.guild.get_channel(welcome_config["channel_id"])
-        if not channel:
-            return
+class RoleView(discord.ui.View):
+    def __init__(self, roles=None):
+        super().__init__(timeout=None)
+        if roles:
+            self.add_item(RoleSelect(roles))
 
-        text = welcome_config["message"].replace("%user", member.mention)
-
-        embed = discord.Embed(
-            description=text,
-            color=discord.Color.from_rgb(255, 105, 180)
-        )
-
-        if os.path.isfile("welcome.png"):
-            file = discord.File("welcome.png", filename="welcome.png")
-            embed.set_image(url="attachment://welcome.png")
-            await channel.send(embed=embed, file=file)
-        else:
-            await channel.send(embed=embed)
-
-    except Exception as e:
-        traceback.print_exc()
+@bot.tree.command(name="rolenaussuchen", description="Rollenmenü erstellen")
+async def rolen(interaction: discord.Interaction, role1: discord.Role, role2: discord.Role = None):
+    roles = [r for r in [role1, role2] if r]
+    embed = discord.Embed(title="🎭 Rollen", description="Wähle deine Rollen", color=discord.Color.purple())
+    await interaction.channel.send(embed=embed, view=RoleView(roles))
+    await interaction.response.send_message("✅ Menü erstellt", ephemeral=True)
 
 # =========================================================
-# KEEP ALIVE WEBSERVER
+# KEEP ALIVE
 # =========================================================
 
-async def health(request):
-    return web.Response(text="Bot läuft!")
+async def health(req):
+    return web.Response(text="online")
 
-async def start_web():
+async def main():
     app = web.Application()
     app.router.add_get("/", health)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8000)))
-    await site.start()
-
-async def main():
-    await start_web()
+    await web.TCPSite(runner, "0.0.0.0", 8000).start()
     await bot.start(os.environ["DISCORD_TOKEN"])
 
 asyncio.run(main())
