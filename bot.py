@@ -59,7 +59,7 @@ welcome_config = {
     "enabled": False,
     "channel_id": None,
     "message": "Willkommen %user auf dem Server!",
-    "image": None,
+    "image": "https://cdn.discordapp.com/attachments/1294971765629653069/1504094342795755701/image.png?ex=6a05bc84&is=6a046b04&hm=03edfd1a24767491b280994f0683509bb815e966a78afd81eee4426e67886dd4&",
     "autorole_id": None
 }
 
@@ -91,6 +91,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 @bot.event
 async def on_ready():
     bot.add_view(WelcomeView())
+    bot.add_view(RoleView())
     try:
         synced = await bot.tree.sync()
         print(f"✅ {len(synced)} Befehle synchronisiert")
@@ -271,12 +272,35 @@ async def autorole(interaction: discord.Interaction, role: discord.Role):
 # ROLE MENU
 # =========================================================
 
+async def _role_select_callback(interaction: discord.Interaction, values: list):
+    try:
+        added = []
+        for r_id in values:
+            if r_id == "0":
+                continue
+            role = interaction.guild.get_role(int(r_id))
+            if role:
+                await interaction.user.add_roles(role)
+                added.append(role.name)
+        if added:
+            await interaction.response.send_message(
+                f"✅ Rollen vergeben: **{', '.join(added)}**",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message("❌ Keine Rollen gefunden.", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message("❌ Keine Rechte zum Vergeben der Rollen.", ephemeral=True)
+    except Exception as e:
+        print(f"❌ Fehler in RoleSelect: {e}")
+        traceback.print_exc()
+        await interaction.response.send_message("❌ Fehler beim Vergeben der Rollen.", ephemeral=True)
+
+
 class PersistentRoleSelect(discord.ui.Select):
-    def __init__(self, roles):
-        options = [
-            discord.SelectOption(label=r.name, value=str(r.id))
-            for r in roles
-        ]
+    def __init__(self, options=None):
+        if options is None:
+            options = [discord.SelectOption(label="-", value="0")]
         super().__init__(
             custom_id="persistent_role_select",
             placeholder="🎭 Rollen wählen",
@@ -286,32 +310,17 @@ class PersistentRoleSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        try:
-            added = []
-            for r_id in self.values:
-                role = interaction.guild.get_role(int(r_id))
-                if role:
-                    await interaction.user.add_roles(role)
-                    added.append(role.name)
-            if added:
-                await interaction.response.send_message(
-                    f"✅ Rollen vergeben: **{', '.join(added)}**",
-                    ephemeral=True
-                )
-            else:
-                await interaction.response.send_message("❌ Keine Rollen gefunden.", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.response.send_message("❌ Keine Rechte zum Vergeben der Rollen.", ephemeral=True)
-        except Exception as e:
-            print(f"❌ Fehler in RoleSelect: {e}")
-            traceback.print_exc()
-            await interaction.response.send_message("❌ Fehler beim Vergeben der Rollen.", ephemeral=True)
+        await _role_select_callback(interaction, self.values)
 
 
 class RoleView(discord.ui.View):
-    def __init__(self, roles):
+    def __init__(self, roles=None):
         super().__init__(timeout=None)
-        self.add_item(PersistentRoleSelect(roles))
+        if roles:
+            options = [discord.SelectOption(label=r.name, value=str(r.id)) for r in roles]
+            self.add_item(PersistentRoleSelect(options))
+        else:
+            self.add_item(PersistentRoleSelect())
 
 @bot.tree.command(name="rolenaussuchen", description="Rollen-Auswahlmenü erstellen")
 async def rolen(
@@ -393,3 +402,4 @@ if not token:
     raise ValueError("❌ DISCORD_TOKEN Umgebungsvariable nicht gesetzt!")
 
 asyncio.run(main())
+
