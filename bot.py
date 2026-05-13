@@ -179,17 +179,6 @@ class WelcomeTextModal(discord.ui.Modal, title="Willkommensnachricht setzen"):
             ephemeral=True
         )
 
-class WelcomeBildModal(discord.ui.Modal, title="Willkommensbild setzen"):
-    url = discord.ui.TextInput(
-        label="Bild-URL (https://...)",
-        placeholder="https://beispiel.com/bild.png",
-        style=discord.TextStyle.short,
-        max_length=500
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        welcome_config["image"] = self.url.value
-        await interaction.response.send_message("✅ Bild gesetzt!", ephemeral=True)
 
 class WelcomeView(discord.ui.View):
     def __init__(self):
@@ -199,9 +188,24 @@ class WelcomeView(discord.ui.View):
     async def text(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(WelcomeTextModal())
 
-    @discord.ui.button(label="🖼️ Bild-URL", style=discord.ButtonStyle.primary, custom_id="welcome_bild")
+    @discord.ui.button(label="🖼️ Bild hochladen", style=discord.ButtonStyle.primary, custom_id="welcome_bild")
     async def image(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(WelcomeBildModal())
+        try:
+            await interaction.response.send_message(
+                "🖼️ Schicke jetzt dein Bild in diesen Kanal! Du hast **60 Sekunden**.",
+                ephemeral=True
+            )
+
+            def check(m):
+                return m.author == interaction.user and m.channel == interaction.channel and m.attachments
+
+            msg = await bot.wait_for("message", check=check, timeout=60)
+            welcome_config["image"] = msg.attachments[0].url
+            await msg.delete()
+            await interaction.followup.send("✅ Bild gesetzt!", ephemeral=True)
+        except Exception as e:
+            print(f"❌ Fehler in Welcome Bild Button: {e}")
+            await interaction.followup.send("❌ Zeitüberschreitung — bitte erneut versuchen.", ephemeral=True)
 
     @discord.ui.button(label="📢 Dieser Kanal", style=discord.ButtonStyle.primary, custom_id="welcome_kanal")
     async def channel(self, interaction: discord.Interaction, button: discord.ui.Button):
