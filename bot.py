@@ -27,7 +27,36 @@ CREATE TABLE IF NOT EXISTS users (
 )
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS config (
+    key TEXT PRIMARY KEY,
+    value TEXT
+)
+""")
+
 conn.commit()
+
+def get_config(key: str, default=None):
+    cursor.execute("SELECT value FROM config WHERE key = ?", (key,))
+    result = cursor.fetchone()
+    if result is None:
+        return default
+    val = result[0]
+    if val == "None":
+        return None
+    if val in ("True", "False"):
+        return val == "True"
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return val
+
+def set_config(key: str, value):
+    cursor.execute(
+        "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, str(value))
+    )
+    conn.commit()
 
 def get_xp(user_id: int):
     cursor.execute("SELECT xp FROM users WHERE user_id = ?", (user_id,))
@@ -56,15 +85,15 @@ def add_xp(user_id: int, amount: int):
 # =========================================================
 
 welcome_config = {
-    "enabled": False,
-    "channel_id": None,
-    "message": "Willkommen %user auf dem Server!",
-    "image": "https://cdn.discordapp.com/attachments/1294971765629653069/1504094342795755701/image.png?ex=6a05bc84&is=6a046b04&hm=03edfd1a24767491b280994f0683509bb815e966a78afd81eee4426e67886dd4&",
-    "autorole_id": None
+    "enabled": get_config("welcome_enabled", False),
+    "channel_id": get_config("welcome_channel_id", None),
+    "message": get_config("welcome_message", "Willkommen %user auf dem Server!"),
+    "image": get_config("welcome_image", None),
+    "autorole_id": get_config("welcome_autorole_id", None)
 }
 
 vip_config = {
-    "role_id": None,
+    "role_id": get_config("vip_role_id", None),
     "required_xp": 10000
 }
 
@@ -152,6 +181,7 @@ async def xp_cmd(interaction: discord.Interaction):
 async def vip(interaction: discord.Interaction, role: discord.Role):
     try:
         vip_config["role_id"] = role.id
+        set_config("vip_role_id", role.id)
         await interaction.response.send_message(
             f"💎 VIP Rolle gesetzt: {role.mention}",
             ephemeral=True
@@ -175,6 +205,7 @@ class WelcomeTextModal(discord.ui.Modal, title="Willkommensnachricht setzen"):
 
     async def on_submit(self, interaction: discord.Interaction):
         welcome_config["message"] = self.nachricht.value
+        set_config("welcome_message", self.nachricht.value)
         await interaction.response.send_message(
             f"✅ Nachricht gesetzt:\n> {self.nachricht.value}",
             ephemeral=True
@@ -202,6 +233,7 @@ class WelcomeView(discord.ui.View):
 
             msg = await bot.wait_for("message", check=check, timeout=60)
             welcome_config["image"] = msg.attachments[0].url
+            set_config("welcome_image", msg.attachments[0].url)
             await msg.delete()
             await interaction.followup.send("✅ Bild gesetzt!", ephemeral=True)
         except Exception as e:
@@ -212,6 +244,7 @@ class WelcomeView(discord.ui.View):
     async def channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             welcome_config["channel_id"] = interaction.channel.id
+            set_config("welcome_channel_id", interaction.channel.id)
             await interaction.response.send_message(
                 f"✅ Willkommenskanal gesetzt: {interaction.channel.mention}", ephemeral=True
             )
@@ -223,6 +256,7 @@ class WelcomeView(discord.ui.View):
     async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             welcome_config["enabled"] = not welcome_config["enabled"]
+            set_config("welcome_enabled", welcome_config["enabled"])
             status = "✅ Aktiviert" if welcome_config["enabled"] else "❌ Deaktiviert"
             await interaction.response.send_message(
                 f"Willkommensnachricht: **{status}**", ephemeral=True
@@ -259,6 +293,7 @@ async def welcome(interaction: discord.Interaction):
 async def autorole(interaction: discord.Interaction, role: discord.Role):
     try:
         welcome_config["autorole_id"] = role.id
+        set_config("welcome_autorole_id", role.id)
         await interaction.response.send_message(
             f"🤖 AutoRole gesetzt: {role.mention}",
             ephemeral=True
@@ -402,4 +437,3 @@ if not token:
     raise ValueError("❌ DISCORD_TOKEN Umgebungsvariable nicht gesetzt!")
 
 asyncio.run(main())
-
