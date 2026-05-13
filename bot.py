@@ -17,7 +17,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # DATABASE (SQLite XP SYSTEM)
 # =========================================================
 
-conn = sqlite3.connect("discord-bot/xp.db")
+conn = sqlite3.connect("xp.db")
 cursor = conn.cursor()
 
 cursor.execute("""
